@@ -105,17 +105,19 @@ prefetch: ## Pre-download all training data (~13 GB) into ./data — run once be
 	@echo ""
 	@echo "$(G)✓ All data cached. Run$(X) $(B)make train WORD=\"Hey Dobbi\" FULL=1$(X) $(G)to start immediately.$(X)"
 
-train: ## Run training — make train WORD="Hey Dobbi" [SAMPLES=500] [STEPS=5000] [FULL=1]
+train: ## Run training — make train WORD="Hey Dobbi" [SAMPLES=2000] [STEPS=25000] [FULL=1] [LANG=de]
 	@[ -n "$(WORD)" ] || { \
 		echo "$(R)Error: WORD is required$(X)"; \
 		echo "Usage: $(B)make train WORD=\"Hey Dobbi\"$(X)"; \
-		echo "       $(B)make train WORD=\"Hey Dobbi\" SAMPLES=1000 STEPS=10000$(X)"; \
+		echo "       $(B)make train WORD=\"Hey Dobbi\" SAMPLES=1000 STEPS=10000 LANG=de$(X)"; \
 		exit 1; }
 	@docker compose run --rm \
 		-e PYTHONUNBUFFERED=1 \
+		-e SPEAKY_LANG=$(or $(LANG),de) \
 		trainer "$(WORD)" \
-		--samples $(or $(SAMPLES),500) \
-		--steps   $(or $(STEPS),5000) \
+		--samples $(or $(SAMPLES),2000) \
+		--steps   $(or $(STEPS),25000) \
+		--lang    $(or $(LANG),de) \
 		$(if $(FULL),--full,)
 
 ##@ Cleanup

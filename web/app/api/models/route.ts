@@ -3,62 +3,90 @@ import fs from 'fs';
 import path from 'path';
 import { OUTPUT_DIR } from '@/lib/paths';
 
+export interface ModelFamily {
+  wakeWord: string;
+  esp32: { tflite: string; manifest: string | null; size: number; mtime: string } | null;
+  wyoming: { onnx: string; data: string | null; size: number; mtime: string } | null;
+}
+
 export async function GET() {
   try {
     if (!fs.existsSync(OUTPUT_DIR)) return NextResponse.json([]);
 
-    const models: { name: string; size: number; mtime: string; path: string }[] = [];
+    // Only scan top-level output/ — training intermediates live in subdirectories
+    const entries = fs.readdirSync(OUTPUT_DIR, { withFileTypes: true })
+      .filter(e => e.isFile());
 
-    // Scan output/ for .onnx files (flat and one level deep)
-    const scan = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isDirectory()) {
-          scan(path.join(dir, entry.name));
-        } else if (entry.name.endsWith('.onnx')) {
-          const full = path.join(dir, entry.name);
-          const stat = fs.statSync(full);
-          models.push({
-            name: entry.name,
-            size: stat.size,
-            mtime: stat.mtime.toISOString(),
-            path: full,
-          });
-        }
-      }
-    };
+    // Group by wake word stem (everything before the extension)
+    const byWord: Record<string, string[]> = {};
+    for (const e of entries) {
+      if (!e.name.endsWith('.tflite') && !e.name.endsWith('.onnx') &&
+          !e.name.endsWith('.onnx.data') && !e.name.endsWith('_manifest.json')) continue;
+      // derive stem
+      let stem = e.name
+        .replace(/_manifest\.json$/, '')
+        .replace(/\.onnx\.data$/, '')
+        .replace(/\.onnx$/, '')
+        .replace(/\.tflite$/, '');
+      (byWord[stem] ??= []).push(e.name);
+    }
 
-    scan(OUTPUT_DIR);
-    models.sort((a, b) => new Date(b.mtime).getTime() - new Date(a.mtime).getTime());
-    return NextResponse.json(models);
+    const families: ModelFamily[] = Object.entries(byWord).map(([word, files]) => {
+      const tflite = files.find(f => f.endsWith('.tflite')) ?? null;
+      const manifest = files.find(f => f.endsWith('_manifest.json')) ?? null;
+      const onnx = files.find(f => f.endsWith('.onnx')) ?? null;
+      const data = files.find(f => f.endsWith('.onnx.data')) ?? null;
+
+      const stat = (name: string | null) => {
+        if (!name) return null;
+        try { return fs.statSync(path.join(OUTPUT_DIR, name)); } catch { return null; }
+      };
+
+      const tfliteS = stat(tflite);
+      const onnxS = stat(onnx);
+
+      return {
+        wakeWord: word,
+        esp32: tflite && tfliteS ? {
+          tflite, manifest,
+          size: tfliteS.size + (stat(manifest)?.size ?? 0),
+          mtime: tfliteS.mtime.toISOString(),
+        } : null,
+        wyoming: onnx && onnxS ? {
+          onnx, data,
+          size: onnxS.size + (stat(data)?.size ?? 0),
+          mtime: onnxS.mtime.toISOString(),
+        } : null,
+      };
+    });
+
+    families.sort((a, b) => {
+      const ma = (a.esp32?.mtime ?? a.wyoming?.mtime) ?? '';
+      const mb = (b.esp32?.mtime ?? b.wyoming?.mtime) ?? '';
+      return mb.localeCompare(ma);
+    });
+
+    return NextResponse.json(families);
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }
 
 export async function DELETE(req: Request) {
-  const { name } = await req.json() as { name: string };
-  if (!name || name.includes('..')) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
+  const { wakeWord, platform } = await req.json() as { wakeWord: string; platform: 'esp32' | 'wyoming' | 'all' };
+  if (!wakeWord || wakeWord.includes('..')) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
 
-  try {
-    // Find the file
-    const find = (dir: string): string | null => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isDirectory()) {
-          const r = find(path.join(dir, entry.name));
-          if (r) return r;
-        } else if (entry.name === name) {
-          return path.join(dir, entry.name);
-        }
-      }
-      return null;
-    };
-
-    const filePath = find(OUTPUT_DIR);
-    if (!filePath) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
-    fs.unlinkSync(filePath);
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+  const candidates: string[] = [];
+  if (platform === 'esp32' || platform === 'all') {
+    candidates.push(`${wakeWord}.tflite`, `${wakeWord}_manifest.json`);
   }
+  if (platform === 'wyoming' || platform === 'all') {
+    candidates.push(`${wakeWord}.onnx`, `${wakeWord}.onnx.data`);
+  }
+
+  for (const name of candidates) {
+    const fp = path.join(OUTPUT_DIR, name);
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+  }
+  return NextResponse.json({ ok: true });
 }

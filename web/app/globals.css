@@ -68,7 +68,12 @@
   }
 
   .log-output {
-    @apply font-mono text-xs bg-slate-950 dark:bg-black text-emerald-400 p-4
-           rounded-lg h-64 overflow-y-auto leading-relaxed;
+    @apply font-mono text-xs bg-slate-950 dark:bg-black p-4
+           rounded-lg h-[32rem] overflow-y-auto leading-relaxed;
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+  }
+  .log-output > div {
+    @apply py-px whitespace-pre-wrap break-all;
   }
 }

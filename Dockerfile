@@ -25,9 +25,18 @@ RUN ARCH=$(uname -m) && \
     test -f /usr/local/piper/piper && \
     echo "Piper installed: $(/usr/local/piper/piper --version 2>&1 || echo ok)"
 
+# TensorFlow for microWakeWord training
+RUN pip install --no-cache-dir tensorflow
+
 # Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Clone microWakeWord and install from source (pip wheel v0.1.0 is incomplete)
+# tbm_utils installed without deps: its pendulum dep requires Rust and fails on Python 3.13
+RUN git clone --depth 1 https://github.com/kahrendt/microWakeWord.git microWakeWord && \
+    pip install --no-cache-dir --no-deps -e microWakeWord && \
+    pip install --no-cache-dir --no-deps tbm_utils
 
 # Clone openWakeWord
 RUN git clone --depth 1 https://github.com/dscripka/openWakeWord.git openWakeWord && \

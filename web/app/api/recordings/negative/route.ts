@@ -29,7 +29,10 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const form = await req.formData();
   const audio = form.get('audio') as File | null;
-  const wakeWord = form.get('wakeWord') as string;
+  // Recorder appends wakeWord={phrase} first, then extraFields appends wakeWord={actualModel}.
+  // getAll returns both — we want the last one (the actual model name from extraFields).
+  const wakeWordValues = form.getAll('wakeWord') as string[];
+  const wakeWord = (wakeWordValues.at(-1) ?? wakeWordValues[0]) as string;
   const phrase = form.get('phrase') as string;
 
   if (!audio || !wakeWord || !phrase)

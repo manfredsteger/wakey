@@ -138,7 +138,7 @@ export default function DashboardPage() {
           />
           <StatCard
             label={t('dashboard.lastTraining')}
-            value={lastRun ? formatDate(lastRun.createdAt) : t('dashboard.noTraining')}
+            value={lastRun ? formatDate(lastRun.finishedAt ?? lastRun.createdAt) : t('dashboard.noTraining')}
             icon={Clock}
             sub={lastRun ? (lastRun.label ?? lastRun.wakeWord) : undefined}
           />

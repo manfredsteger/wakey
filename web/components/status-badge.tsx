@@ -5,6 +5,8 @@ const styles: Record<string, string> = {
   running: 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-400 animate-pulse',
   done: 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400',
   failed: 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400',
+  paused: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400',
+  cancelled: 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400',
 };
 
 const dots: Record<string, string> = {
@@ -12,6 +14,8 @@ const dots: Record<string, string> = {
   running: 'bg-blue-500',
   done: 'bg-emerald-500',
   failed: 'bg-red-500',
+  paused: 'bg-amber-500',
+  cancelled: 'bg-red-400',
 };
 
 interface StatusBadgeProps {

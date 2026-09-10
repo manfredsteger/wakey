@@ -18,6 +18,10 @@ pip install --upgrade pip -q
 echo "→ Installing PyTorch (MPS-capable)..."
 pip install torch torchaudio -q
 
+# ── TensorFlow for microWakeWord (tensorflow-macos deprecated; use tensorflow) ─
+echo "→ Installing TensorFlow..."
+pip install tensorflow -q
+
 # ── Training dependencies ─────────────────────────────────────────────────────
 echo "→ Installing training dependencies..."
 pip install -r "$DIR/requirements.txt" -q
@@ -29,6 +33,18 @@ if [ ! -d "$DIR/openWakeWord" ]; then
 fi
 pip install -e "$DIR/openWakeWord" -q
 echo "  ✓ openWakeWord installed"
+
+# ── Clone & install microWakeWord (for ESP32 on-device training) ──────────────
+if [ ! -d "$DIR/microWakeWord" ]; then
+    echo "→ Cloning microWakeWord..."
+    git clone --depth 1 https://github.com/kahrendt/microWakeWord "$DIR/microWakeWord" -q
+fi
+# Install from source (pip wheel is incomplete); skip pendulum which fails on Python 3.13
+pip install --no-deps -e "$DIR/microWakeWord" -q 2>/dev/null || true
+# Install tbm_utils without deps (its pendulum dep fails to build on Python 3.13)
+pip install --no-deps tbm_utils -q
+pip install mmap_ninja pymicro-features webrtcvad-wheels audio_metadata -q
+echo "  ✓ microWakeWord installed"
 
 # ── TTS: macOS built-in voices + ffmpeg ──────────────────────────────────────
 echo "→ Checking TTS dependencies..."

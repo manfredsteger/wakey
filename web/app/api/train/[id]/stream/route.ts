@@ -1,6 +1,10 @@
 import fs from 'fs';
 import { db } from '@/lib/db';
 
+function isPidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: rawId } = await params;
   const run = await db.trainingRun.findUnique({ where: { id: parseInt(rawId) } });
@@ -69,7 +73,23 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
           if (!done) {
             const fresh = await db.trainingRun.findUnique({ where: { id: run.id } });
-            if (fresh && fresh.status !== 'running') done = true;
+            if (fresh && fresh.status !== 'running' && fresh.status !== 'paused') {
+              done = true;
+            } else if (fresh && fresh.pid && !isPidAlive(fresh.pid)) {
+              // Process is dead but DB still shows running — close handler was lost (dev restart).
+              // Determine outcome from log content written by train.py itself.
+              let logContent = '';
+              try { logContent = fs.readFileSync(run.logFile!, 'utf8'); } catch { /* ignore */ }
+              const finalStatus = logContent.includes('__DONE__') ? 'done' : 'failed';
+              send(finalStatus === 'done' ? '__DONE__' : '__FAILED__');
+              done = true;
+              try {
+                await db.trainingRun.update({
+                  where: { id: run.id },
+                  data: { status: finalStatus, finishedAt: new Date() },
+                });
+              } catch { /* ignore */ }
+            }
           }
         } catch { /* stat/read error — process may have ended */ }
 

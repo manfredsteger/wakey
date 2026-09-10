@@ -4,7 +4,7 @@ import { I18nProvider } from '@/lib/i18n';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Wake Word Trainer',
+  title: 'Speaky',
   description: 'Train custom wake words for Home Assistant',
 };
 
