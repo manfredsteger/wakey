@@ -1735,10 +1735,13 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
         "freq_mask_max_size":    [5,       5,       5],
         "freq_mask_count":       [1,       2,       2],
         "eval_step_interval":    500,
-        # 2000ms window: slow/long "Hey Dobbi" variants (up to 1.75s) must fit
+        # ~2s window: slow/long "Hey Dobbi" variants (up to 1.75s) must fit
         # completely after the ~0.2s end-jitter — at 1500ms the "Hey" of any
-        # clip >1.3s was silently truncated away during training
-        "clip_duration_ms":      2000,
+        # clip >1.3s was silently truncated away during training.
+        # MUST yield a spectrogram_length divisible by the model stride (3):
+        # (1 + (16*ms - 480)//480 + slices_dropped) % 3 == 0 — else the INT8
+        # calibration asserts. 2040 → length 222 ✓ (2000 → 220 ✗)
+        "clip_duration_ms":      2040,
         "target_minimization":   0.9,
         "minimization_metric":   None,
         "maximization_metric":   "average_viable_recall",
