@@ -3,7 +3,7 @@ torchaudio
 torchinfo==1.8.0
 torchmetrics==1.2.0
 speechbrain==0.5.16
-audiomentations==0.33.0
+audiomentations>=0.34.0
 torch-audiomentations==0.11.0
 scipy
 numpy
@@ -18,3 +18,10 @@ onnxruntime
 soundfile
 onnxscript
 sounddevice
+# microWakeWord ESP32 on-device training (repo cloned by setup.sh / Dockerfile)
+mmap_ninja
+pymicro-features
+webrtcvad-wheels
+audio_metadata
+tensorboard
+piper-tts    # neural TTS backend (macOS + Linux), de_DE-mls = 236 German speakers
