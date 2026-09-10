@@ -1663,14 +1663,14 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
     features_list = [
         # TTS positives (standard weight)
         {"features_dir": str(features_dir),
-         "sampling_weight": 2.0, "penalty_weight": 1.0,
+         "sampling_weight": 4.0, "penalty_weight": 1.0,
          "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"},
     ]
     if has_real:
         # Real recordings: same weight as TTS block but more repetitions were applied
         features_list.append(
             {"features_dir": str(real_features_dir),
-             "sampling_weight": 8.0, "penalty_weight": 2.0,
+             "sampling_weight": 12.0, "penalty_weight": 2.0,
              "truth": True, "truncation_strategy": "truncate_start", "type": "mmap"}
         )
     features_list += [
@@ -1691,7 +1691,7 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
         # Adversarial German sentences, same TTS voices as positives — blocks
         # voice-identity/TTS-artifact shortcuts (arXiv:2201.00167)
         {"features_dir": str(adv_features_dir),
-         "sampling_weight": 6.0, "penalty_weight": 2.0,
+         "sampling_weight": 5.0, "penalty_weight": 2.0,
          "truth": False, "truncation_strategy": "truncate_start", "type": "mmap"},
         # Ambient eval set (sampling_weight=0 → eval only, not training)
         {"features_dir": str(MWW_NEG_DIR / "dinner_party_eval"),
@@ -1703,7 +1703,7 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
         # English-only; this is what actually causes household false triggers
         features_list.append(
             {"features_dir": str(GERMAN_FEATURES_DIR),
-             "sampling_weight": 12.0, "penalty_weight": 2.0,
+             "sampling_weight": 8.0, "penalty_weight": 1.5,
              "truth": False, "truncation_strategy": "truncate_start", "type": "mmap"})
     if has_german_eval:
         # German ambient eval (sampling_weight=0) — makes reported FA/h include German speech
@@ -1726,7 +1726,9 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
         # 3-phase schedule: broad learning → refinement → fine-tuning
         "training_steps":        [phase1,  phase2,  phase3],
         "positive_class_weight": [1,       1,       1],
-        "negative_class_weight": [20,      30,      50],
+        # Softer than the original [20,30,50]: with 3 strong real-negative
+        # sets in the mix the hard class weight over-suppressed recall
+        "negative_class_weight": [10,      15,      20],
         "learning_rates":        [0.001,   0.0005,  0.0001],
         "batch_size":            128,
         # SpecAugment: time + frequency masking improves generalization
