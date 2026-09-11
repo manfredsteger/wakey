@@ -435,22 +435,29 @@ def piper_py_to_wav(text: str, onnx_path: str, speaker_id: int | None,
 # "positive" teaches the model that arbitrary speech is the wake word.
 # Every TTS positive must pass a Whisper transcription check.
 
-QC_CONSONANT_SWAPS = {"d": "t", "t": "d", "b": "p", "p": "b", "g": "k", "k": "g"}
-QC_EXTRA_ACCEPT = ["cop", "kop", "kob", "bob", "hobb", "abb", "oby", "obi"]
+QC_CONSONANT_SWAPS = {"d": "t", "t": "d", "b": "p", "p": "b", "g": "k", "k": "g",
+                      "v": "w", "w": "v", "s": "z", "z": "s"}
+# Kalibriert an echten Whisper-Verhörern von "Hey Dobbi": Dolby, Heido B.,
+# dotty, Dabi, topi — alles gültige Treffer, die v1 fälschlich verwarf (46%!)
+QC_EXTRA_ACCEPT = ["cop", "kop", "kob", "bob", "hobb", "abb", "oby", "obi",
+                   "dab", "abi", "olb", "dot", "ido", "eido", "topi", "toppy",
+                   "tobi", "dabi", "dolb"]
 
 
 def _qc_accept_regex(wake_word: str):
-    """Build an accept-regex from 3-grams of the wake word's main word,
-    plus common consonant-confusion variants (ASR mishears pitched TTS)."""
+    """Build an accept-regex from 3-grams of the wake word's main word, plus
+    consonant-confusion variants — ALL swap combinations per gram, since ASR
+    routinely mishears several consonants at once ("dobbi" → "toppi")."""
+    from itertools import product
     words = [w for w in re.sub(r"[^a-zäöüß ]", "", wake_word.lower()).split() if len(w) >= 3]
     main = max(words, key=len) if words else wake_word.lower()
     grams = set()
     for i in range(len(main) - 2):
         g = main[i:i + 3]
-        grams.add(g)
-        for j, ch in enumerate(g):
-            if ch in QC_CONSONANT_SWAPS:
-                grams.add(g[:j] + QC_CONSONANT_SWAPS[ch] + g[j + 1:])
+        options = [(ch, QC_CONSONANT_SWAPS[ch]) if ch in QC_CONSONANT_SWAPS else (ch,)
+                   for ch in g]
+        for combo in product(*options):
+            grams.add("".join(combo))
     grams.update(QC_EXTRA_ACCEPT)
     return re.compile("|".join(sorted(re.escape(g) for g in grams)), re.I)
 
@@ -1720,6 +1727,12 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
 
     # ── TTS positive spectrograms (standard weight) ────────────────────────────
     print("\n  Generating TTS positive spectrograms …")
+    n_tts_now = len(list(tts_link_dir.glob("*.wav")))
+    tts_count_file = features_dir / "_clip_count.txt"
+    if tts_count_file.exists() and tts_count_file.read_text() != str(n_tts_now):
+        shutil.rmtree(str(features_dir))
+    features_dir.mkdir(parents=True, exist_ok=True)
+    tts_count_file.write_text(str(n_tts_now))
     _generate_mww_positive_features(tts_link_dir, features_dir, repetition=2, eq_prob=0.1)
 
     # ── Real recording spectrograms (higher weight, more repetition) ───────────
