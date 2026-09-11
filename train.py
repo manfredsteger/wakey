@@ -378,10 +378,15 @@ def download_piper_py_de_pool() -> list[tuple[str, int | None]]:
                 shutil.copy(hf_hub_download("rhasspy/piper-voices",
                                             f"{hf_subpath}/{model_name}.onnx.json"), json_file)
             n_spk = _json.load(open(json_file)).get("num_speakers", 1)
-            if n_spk and n_spk > 1:
+            if n_spk and n_spk > 200:
+                # Large multi-speaker (mls): great diversity but hallucination-prone
                 pool.extend((str(onnx_file), sid) for sid in range(n_spk))
+            elif n_spk and n_spk > 1:
+                # Small multi-speaker (emotional): weight up
+                pool.extend((str(onnx_file), sid) for sid in range(n_spk) for _ in range(4))
             else:
-                pool.append((str(onnx_file), None))
+                # Single-speaker voices are reliable — weight up strongly
+                pool.extend([(str(onnx_file), None)] * 12)
         except Exception as e:
             tqdm.write(f"    ⚠ Skipped voice {model_name}: {e}")
     return pool
@@ -422,6 +427,80 @@ def piper_py_to_wav(text: str, onnx_path: str, speaker_id: int | None,
         )
     finally:
         os.unlink(raw_wav)
+
+
+# ── ASR quality control for TTS positives ────────────────────────────────────
+# Multi-speaker TTS (esp. de_DE-mls) hallucinates full sentences on short
+# prompts — measured 42% junk in generated positives. Training junk as
+# "positive" teaches the model that arbitrary speech is the wake word.
+# Every TTS positive must pass a Whisper transcription check.
+
+QC_CONSONANT_SWAPS = {"d": "t", "t": "d", "b": "p", "p": "b", "g": "k", "k": "g"}
+QC_EXTRA_ACCEPT = ["cop", "kop", "kob", "bob", "hobb", "abb", "oby", "obi"]
+
+
+def _qc_accept_regex(wake_word: str):
+    """Build an accept-regex from 3-grams of the wake word's main word,
+    plus common consonant-confusion variants (ASR mishears pitched TTS)."""
+    words = [w for w in re.sub(r"[^a-zäöüß ]", "", wake_word.lower()).split() if len(w) >= 3]
+    main = max(words, key=len) if words else wake_word.lower()
+    grams = set()
+    for i in range(len(main) - 2):
+        g = main[i:i + 3]
+        grams.add(g)
+        for j, ch in enumerate(g):
+            if ch in QC_CONSONANT_SWAPS:
+                grams.add(g[:j] + QC_CONSONANT_SWAPS[ch] + g[j + 1:])
+    grams.update(QC_EXTRA_ACCEPT)
+    return re.compile("|".join(sorted(re.escape(g) for g in grams)), re.I)
+
+
+_QC_MODEL = None
+
+
+def _qc_filter_tts_positives(dirs: list[Path], wake_word: str, lang: str = "de") -> int:
+    """Transcribe every non-real positive WAV and DELETE clips whose transcript
+    is not the wake word. Cached per file in <dir>/qc_cache.json.
+    Returns number of rejected (deleted) clips."""
+    global _QC_MODEL
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        print("  ⚠ faster-whisper not installed — skipping positive QC (pip install faster-whisper)")
+        return 0
+    if _QC_MODEL is None:
+        print("  Loading Whisper base (int8) for sample QC …")
+        _QC_MODEL = WhisperModel("base", device="cpu", compute_type="int8")
+    accept = _qc_accept_regex(wake_word)
+    rejected = 0
+    for d in dirs:
+        cache_path = d / "qc_cache.json"
+        cache = {}
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text())
+            except Exception:
+                cache = {}
+        wavs = [w for w in sorted(d.glob("*.wav")) if not w.name.startswith("real_")]
+        todo = [w for w in wavs if w.name not in cache]
+        if todo:
+            print(f"  QC: transcribing {len(todo)} clips in {d.name} …")
+        for w in tqdm(todo, desc=f"QC {d.name}", disable=len(todo) < 20):
+            try:
+                segs, _ = _QC_MODEL.transcribe(str(w), language=lang, beam_size=1)
+                text = " ".join(seg.text for seg in segs).strip()
+            except Exception:
+                text = ""
+            norm = re.sub(r"[^a-zäöüß ]", "", text.lower())
+            ok = bool(accept.search(norm)) and len(norm.split()) <= 3
+            cache[w.name] = {"t": text, "ok": ok}
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False))
+        for w in wavs:
+            entry = cache.get(w.name)
+            if entry and not entry["ok"]:
+                w.unlink(missing_ok=True)
+                rejected += 1
+    return rejected
 
 
 def get_available_voices() -> list[str]:
@@ -592,6 +671,42 @@ def generate_samples(
             except Exception as e:
                 failed += 1
                 tqdm.write(f"  ⚠ Skipped sample {idx}: {e}")
+
+    # ── ASR quality control: hallucinated TTS clips poison the positive class ──
+    n_rejected = _qc_filter_tts_positives([train_dir, test_dir], wake_word, lang)
+    if n_rejected:
+        print(f"  QC rejected {n_rejected} hallucinated clips")
+    if n_rejected and not _IS_LINUX:
+        # Regenerate the deficit with hallucination-safe voices (no mls)
+        safe_pool = [e for e in piper_pool if "mls" not in Path(e[0]).stem]
+        for _round in range(3):
+            n_test = len(list(test_dir.glob("*.wav")))
+            n_train_tts = len([w for w in train_dir.glob("*.wav")
+                               if not w.name.startswith("real_")])
+            deficit_test = max(0, n_val - n_test)
+            deficit_train = max(0, (n_samples - n_val) - n_train_tts)
+            if deficit_test + deficit_train == 0:
+                break
+            print(f"  Regenerating {deficit_train}+{deficit_test} clips (round {_round + 1}) …")
+            targets = [test_dir] * deficit_test + [train_dir] * deficit_train
+            for k, dest in enumerate(targets):
+                out_wav = dest / f"{uuid.uuid4().hex}.wav"
+                pitch = PITCH_SHIFTS[k % len(PITCH_SHIFTS)]
+                text = text_variants[k % len(text_variants)]
+                try:
+                    if safe_pool and k % 3 != 2:
+                        onnx, spk = safe_pool[(k * 31) % len(safe_pool)]
+                        piper_py_to_wav(text, onnx, spk,
+                                        RATE_FACTORS[k % len(RATE_FACTORS)],
+                                        pitch, out_wav, ffmpeg)
+                    else:
+                        voice = voices[k % len(voices)]
+                        say_to_wav(text, voice, RATES[k % len(RATES)], pitch, out_wav, ffmpeg)
+                    if not _dur_ok(out_wav):
+                        out_wav.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            _qc_filter_tts_positives([train_dir, test_dir], wake_word, lang)
 
     good = len(list(train_dir.glob("*.wav")))
     print(f"  ✓ {good} training + {len(list(test_dir.glob('*.wav')))} validation WAVs"

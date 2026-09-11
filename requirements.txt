@@ -25,3 +25,4 @@ webrtcvad-wheels
 audio_metadata
 tensorboard
 piper-tts    # neural TTS backend (macOS + Linux), de_DE-mls = 236 German speakers
+faster-whisper    # ASR-QC: rejects hallucinated TTS positives
