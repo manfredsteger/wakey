@@ -257,7 +257,7 @@ def piper_to_wav(text: str, model_path: str, rate_factor: float, pitch_shift: in
         subprocess.run(
             f"echo {shlex.quote(text)} | {shlex.quote(piper)} "
             f"--model {shlex.quote(model_path)} --output_file {shlex.quote(raw_wav)}",
-            shell=True, check=True, capture_output=True,
+            shell=True, check=True, capture_output=True, timeout=60,
         )
         _trim = "silenceremove=start_periods=1:start_threshold=-40dB,areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse"
         if rate_factor == 1.0 and pitch_shift == 0:
@@ -274,7 +274,7 @@ def piper_to_wav(text: str, model_path: str, rate_factor: float, pitch_shift: in
             [ffmpeg, "-y", "-i", raw_wav,
              "-af", af, "-ar", "16000", "-ac", "1",
              "-acodec", "pcm_s16le", str(output_wav)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, timeout=30,
         )
     finally:
         try:
@@ -304,7 +304,7 @@ def say_to_wav(text: str, voice: str, rate: int, pitch_shift: int,
         # Step 1: TTS → AIFF
         subprocess.run(
             ["say", "-v", voice, "-r", str(rate), "-o", aiff_path, text],
-            check=True, capture_output=True,
+            check=True, capture_output=True, timeout=30,
         )
 
         # Step 2: AIFF → 16kHz mono WAV (+ optional pitch shift)
@@ -325,7 +325,7 @@ def say_to_wav(text: str, voice: str, rate: int, pitch_shift: int,
              "-af", audio_filter,
              "-ar", "16000", "-ac", "1",
              "-acodec", "pcm_s16le", str(output_wav)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, timeout=30,
         )
     finally:
         os.unlink(aiff_path)
@@ -423,7 +423,7 @@ def piper_py_to_wav(text: str, onnx_path: str, speaker_id: int | None,
             [ffmpeg, "-y", "-i", raw_wav,
              "-af", af, "-ar", "16000", "-ac", "1",
              "-acodec", "pcm_s16le", str(output_wav)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, timeout=30,
         )
     finally:
         os.unlink(raw_wav)
@@ -1311,7 +1311,7 @@ def _download_german_speech(n_train: int = 6000, n_eval: int = 400) -> bool:
                         subprocess.run(
                             [ffmpeg, "-y", "-i", tmp_path, "-t", "9",
                              "-ar", "16000", "-ac", "1", "-acodec", "pcm_s16le", str(dst)],
-                            check=True, capture_output=True)
+                            check=True, capture_output=True, timeout=60)
                         # Discard clips shorter than ~1.5 s (44-byte header + 32 kB/s)
                         if dst.stat().st_size < 48000:
                             dst.unlink()
@@ -1382,7 +1382,7 @@ def _generate_german_eval_features() -> bool:
             subprocess.run(
                 [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
                  "-ar", "16000", "-ac", "1", "-acodec", "pcm_s16le", str(stream_wav)],
-                check=True, capture_output=True)
+                check=True, capture_output=True, timeout=120)
         print(f"  Generating German eval spectrograms ({split_name}) …")
         mmap_dir.parent.mkdir(parents=True, exist_ok=True)
         clips = Clips(input_directory=str(stream_dir), file_pattern="*.wav",
@@ -1419,7 +1419,7 @@ def _lufs_normalize_dir(src_dir: Path, dst_dir: Path, ffmpeg: str,
                          "silenceremove=start_periods=1:start_threshold=-40dB,"
                          "areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse"),
                  "-ar", "16000", "-ac", "1", "-acodec", "pcm_s16le", str(dst)],
-                check=True, capture_output=True,
+                check=True, capture_output=True, timeout=60,
             )
             # Discard files that ended up empty/too short after trimming
             if dst.exists() and dst.stat().st_size < 44 + int(0.3 * 32000):
@@ -2088,6 +2088,15 @@ def main():
     model_name = re.sub(r'[,!. ]+', '_', args.wake_word.lower()).strip('_')
     model_dir = OUTPUT_DIR / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Keep macOS awake for the whole run — an overnight sleep froze a `say`
+    # subprocess mid-generation and deadlocked a training run for 6+ hours
+    if not _IS_LINUX:
+        try:
+            subprocess.Popen(["caffeinate", "-is", "-w", str(os.getpid())],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
     # ── microWakeWord path ─────────────────────────────────────────────────────
     if args.platform == "microWakeWord":
