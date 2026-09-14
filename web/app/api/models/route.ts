@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { OUTPUT_DIR } from '@/lib/paths';
+import { fileMd5, getProvenance, type Provenance } from '@/lib/model-provenance';
 
 export interface ModelFamily {
   wakeWord: string;
-  esp32: { tflite: string; manifest: string | null; size: number; mtime: string } | null;
-  wyoming: { onnx: string; data: string | null; size: number; mtime: string } | null;
+  esp32: { tflite: string; manifest: string | null; size: number; mtime: string; md5: string; provenance: Provenance } | null;
+  wyoming: { onnx: string; data: string | null; size: number; mtime: string; md5: string; provenance: Provenance } | null;
 }
 
 export async function GET() {
@@ -31,7 +32,7 @@ export async function GET() {
       (byWord[stem] ??= []).push(e.name);
     }
 
-    const families: ModelFamily[] = Object.entries(byWord).map(([word, files]) => {
+    const families: ModelFamily[] = await Promise.all(Object.entries(byWord).map(async ([word, files]) => {
       const tflite = files.find(f => f.endsWith('.tflite')) ?? null;
       const manifest = files.find(f => f.endsWith('_manifest.json')) ?? null;
       const onnx = files.find(f => f.endsWith('.onnx')) ?? null;
@@ -51,14 +52,18 @@ export async function GET() {
           tflite, manifest,
           size: tfliteS.size + (stat(manifest)?.size ?? 0),
           mtime: tfliteS.mtime.toISOString(),
+          md5: fileMd5(path.join(OUTPUT_DIR, tflite)),
+          provenance: await getProvenance(word, 'esp32', tfliteS.mtime),
         } : null,
         wyoming: onnx && onnxS ? {
           onnx, data,
           size: onnxS.size + (stat(data)?.size ?? 0),
           mtime: onnxS.mtime.toISOString(),
+          md5: fileMd5(path.join(OUTPUT_DIR, onnx)),
+          provenance: await getProvenance(word, 'wyoming', onnxS.mtime),
         } : null,
       };
-    });
+    }));
 
     families.sort((a, b) => {
       const ma = (a.esp32?.mtime ?? a.wyoming?.mtime) ?? '';

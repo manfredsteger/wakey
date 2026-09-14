@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Package, Trash2, FileAudio, Server, Cpu,
   Plus, X, Pencil, FolderOpen, Folder,
-  ChevronDown, ChevronUp, FileArchive, GripVertical,
+  ChevronDown, ChevronUp, FileArchive, GripVertical, AlertTriangle,
 } from 'lucide-react';
 import { Header } from '@/components/header';
 import { useI18n } from '@/lib/i18n';
@@ -13,10 +13,42 @@ import { formatBytes, formatDate } from '@/lib/utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface RunInfo { id: number; status: string; createdAt: string; finishedAt: string | null }
+interface Provenance {
+  producedBy: RunInfo | null;
+  latestRun: RunInfo | null;
+  stale: boolean;
+  staleReason: 'training_running' | 'newer_run_no_file' | 'latest_run_failed' | null;
+}
+interface Bundle { size: number; mtime: string; md5: string; provenance: Provenance }
 interface ModelFamily {
   wakeWord: string;
-  esp32: { tflite: string; manifest: string | null; size: number; mtime: string } | null;
-  wyoming: { onnx: string; data: string | null; size: number; mtime: string } | null;
+  esp32: (Bundle & { tflite: string; manifest: string | null }) | null;
+  wyoming: (Bundle & { onnx: string; data: string | null }) | null;
+}
+
+const STALE_TEXT: Record<NonNullable<Provenance['staleReason']>, string> = {
+  training_running: 'Ein Training läuft gerade – diese Datei wird gleich überschrieben.',
+  newer_run_no_file: 'Ein neuerer Trainingslauf ist fertig, aber die Datei ist älter. Log des Laufs prüfen!',
+  latest_run_failed: 'Der letzte Trainingslauf ist fehlgeschlagen – dies ist das Modell eines älteren Laufs.',
+};
+
+function ProvenanceLine({ b }: { b: Bundle }) {
+  const p = b.provenance;
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+        {p.producedBy ? `Run #${p.producedBy.id} · fertig ${formatDate(p.producedBy.finishedAt ?? p.producedBy.createdAt)}` : 'Lauf unbekannt (kein DB-Eintrag)'}
+        {' · md5 '}{b.md5.slice(0, 8)}
+      </p>
+      {p.stale && p.staleReason && (
+        <p className="text-xs font-medium text-red-600 dark:text-red-400 flex items-center gap-1">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> VERALTET: {STALE_TEXT[p.staleReason]}
+          {p.latestRun && ` (neuester Lauf: #${p.latestRun.id}, ${p.latestRun.status})`}
+        </p>
+      )}
+    </div>
+  );
 }
 
 interface Group {
@@ -32,9 +64,10 @@ function displayName(wakeWord: string) {
   return wakeWord.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function downloadZip(wakeWord: string, platform: 'esp32' | 'wyoming') {
+function downloadZip(wakeWord: string, platform: 'esp32' | 'wyoming', stale = false) {
+  if (stale && !confirm('Dieses Modell ist laut Trainings-DB NICHT das neueste. Trotzdem herunterladen?')) return;
   const a = document.createElement('a');
-  a.href = `/api/models/download?word=${encodeURIComponent(wakeWord)}&platform=${platform}`;
+  a.href = `/api/models/download?word=${encodeURIComponent(wakeWord)}&platform=${platform}${stale ? '&force=1' : ''}`;
   a.download = `${wakeWord}_${platform}.zip`;
   a.click();
 }
@@ -340,12 +373,15 @@ function ModelFamilyCard({
               </button>
             )}
           </div>
+          <ProvenanceLine b={family.esp32} />
           <button
-            onClick={() => downloadZip(family.wakeWord, 'esp32')}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-900 text-sm font-medium transition-colors"
+            onClick={() => downloadZip(family.wakeWord, 'esp32', family.esp32!.provenance.stale)}
+            className={`w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${family.esp32.provenance.stale
+              ? 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900'
+              : 'bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-900'}`}
           >
             <FileArchive className="w-4 h-4" />
-            ZIP herunterladen (.tflite + manifest + README)
+            {family.esp32.provenance.stale ? 'Veraltetes Modell trotzdem herunterladen' : 'ZIP herunterladen (.tflite + manifest + README)'}
           </button>
         </div>
       )}
@@ -369,12 +405,15 @@ function ModelFamilyCard({
               </button>
             )}
           </div>
+          <ProvenanceLine b={family.wyoming} />
           <button
-            onClick={() => downloadZip(family.wakeWord, 'wyoming')}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 hover:bg-sky-200 dark:hover:bg-sky-900 text-sm font-medium transition-colors"
+            onClick={() => downloadZip(family.wakeWord, 'wyoming', family.wyoming!.provenance.stale)}
+            className={`w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${family.wyoming.provenance.stale
+              ? 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900'
+              : 'bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 hover:bg-sky-200 dark:hover:bg-sky-900'}`}
           >
             <FileArchive className="w-4 h-4" />
-            ZIP herunterladen (.onnx + .data + README)
+            {family.wyoming.provenance.stale ? 'Veraltetes Modell trotzdem herunterladen' : 'ZIP herunterladen (.onnx + .data + README)'}
           </button>
         </div>
       )}

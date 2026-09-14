@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Package, Mic, Zap, Clock, ArrowRight, Pencil, Check, X } from 'lucide-react';
+import { Package, Mic, Zap, Clock, ArrowRight, Pencil, Check, X, FileArchive, Cpu, Server, AlertTriangle } from 'lucide-react';
 import { Header } from '@/components/header';
 import { StatCard } from '@/components/stat-card';
 import { StatusBadge } from '@/components/status-badge';
@@ -22,10 +22,49 @@ interface Run {
   finishedAt: string | null;
 }
 
+interface RunInfo { id: number; status: string; createdAt: string; finishedAt: string | null }
+interface Provenance { producedBy: RunInfo | null; latestRun: RunInfo | null; stale: boolean; staleReason: string | null }
+interface Bundle { size: number; mtime: string; md5: string; provenance: Provenance }
 interface Model {
-  name: string;
-  size: number;
-  mtime: string;
+  wakeWord: string;
+  esp32: Bundle | null;
+  wyoming: Bundle | null;
+}
+
+function downloadZip(wakeWord: string, platform: 'esp32' | 'wyoming', stale: boolean) {
+  if (stale && !confirm('Dieses Modell ist laut Trainings-DB NICHT das neueste. Trotzdem herunterladen?')) return;
+  const a = document.createElement('a');
+  a.href = `/api/models/download?word=${encodeURIComponent(wakeWord)}&platform=${platform}${stale ? '&force=1' : ''}`;
+  a.download = `${wakeWord}_${platform}.zip`;
+  a.click();
+}
+
+function DownloadButton({ model, platform }: { model: Model; platform: 'esp32' | 'wyoming' }) {
+  const b = platform === 'esp32' ? model.esp32 : model.wyoming;
+  if (!b) return null;
+  const Icon = platform === 'esp32' ? Cpu : Server;
+  const stale = b.provenance.stale;
+  const run = b.provenance.producedBy;
+  return (
+    <button
+      onClick={() => downloadZip(model.wakeWord, platform, stale)}
+      className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left ${stale
+        ? 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900'
+        : platform === 'esp32'
+          ? 'bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-900'
+          : 'bg-sky-100 dark:bg-sky-950 text-sky-700 dark:text-sky-300 hover:bg-sky-200 dark:hover:bg-sky-900'}`}
+      title={stale ? 'Veraltet – neuerer Trainingslauf vorhanden' : `md5 ${b.md5}`}
+    >
+      {stale ? <AlertTriangle className="w-4 h-4 shrink-0" /> : <Icon className="w-4 h-4 shrink-0" />}
+      <span className="flex-1">
+        <span className="block">{platform === 'esp32' ? 'ESP32 ZIP (.tflite + manifest)' : 'Wyoming ZIP (.onnx + .data)'}</span>
+        <span className="block text-xs opacity-70 font-mono">
+          {run ? `Run #${run.id} · ` : ''}{formatDate(b.mtime)}{stale ? ' · VERALTET' : ''}
+        </span>
+      </span>
+      <FileArchive className="w-4 h-4 shrink-0 opacity-70" />
+    </button>
+  );
 }
 
 interface Speaker {
@@ -174,6 +213,26 @@ export default function DashboardPage() {
             <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition-colors" />
           </Link>
         </div>
+
+        {/* Newest model download */}
+        {models[0] && (models[0].esp32 || models[0].wyoming) && (
+          <div className="card p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+            <div className="p-3 bg-violet-100 dark:bg-violet-950 rounded-xl text-violet-600 dark:text-violet-400 self-start">
+              <Package className="w-6 h-6" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-slate-900 dark:text-white">Neuestes Modell herunterladen</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                “{models[0].wakeWord.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}” ·
+                Herkunft wird gegen die Trainings-DB geprüft, MD5 liegt im ZIP (BUILD_INFO.txt)
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <DownloadButton model={models[0]} platform="esp32" />
+              <DownloadButton model={models[0]} platform="wyoming" />
+            </div>
+          </div>
+        )}
 
         {/* Recent training runs */}
         <div className="card overflow-hidden">
