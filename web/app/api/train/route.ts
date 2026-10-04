@@ -47,12 +47,13 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const { wakeWord, samples, steps, full, platform } = await req.json() as {
+  const { wakeWord, samples, steps, full, platform, germanClips } = await req.json() as {
     wakeWord: string;
     samples: number;
     steps: number;
     full: boolean;
     platform: string;
+    germanClips?: number;
   };
 
   if (!wakeWord?.trim()) return NextResponse.json({ error: 'wakeWord required' }, { status: 400 });
@@ -87,6 +88,7 @@ export async function POST(req: Request) {
   const { ttsLang } = readSettings();
   const args = [TRAIN_SCRIPT, wakeWord, '--samples', String(samples), '--steps', String(steps), '--platform', resolvedPlatform, '--lang', ttsLang ?? 'de'];
   if (full) args.push('--full');
+  if (Number.isInteger(germanClips) && germanClips! > 0) args.push('--german-clips', String(germanClips));
 
   const logFd = fs.openSync(logFile, 'a');
   const child = spawn(PYTHON, args, {

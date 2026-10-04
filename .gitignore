@@ -38,3 +38,12 @@ settings.json
 # Web build artifacts + local DB
 web/prisma/dev.db
 web/tsconfig.tsbuildinfo
+
+# Local logs
+logs/
+
+# Deployment-specific helpers (contain private IPs, device IDs, ESPHome API key)
+tools/respeaker_mww_log.py
+tools/dobby_warmup.py
+tools/*.service
+tools/*.timer

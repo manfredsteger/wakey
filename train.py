@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -574,8 +575,12 @@ def generate_samples(
 
     existing_train = len(list(train_dir.glob("*.wav")))
     existing_test = len(list(test_dir.glob("*.wav")))
-    if existing_train + existing_test >= n_samples:
-        print(f"  ✓ {existing_train + existing_test} samples already exist, skipping")
+    # ASR-QC plus its top-up rounds usually end a few % short of n_samples.
+    # Requiring the exact count made every later run regenerate the FULL set
+    # on top of the existing one (positives piled up, runs not comparable).
+    if existing_train + existing_test >= int(n_samples * 0.95):
+        print(f"  ✓ {existing_train + existing_test} samples already exist "
+              f"(target {n_samples}), skipping")
         return train_dir, test_dir
 
     n_val = max(int(n_samples * val_split), min(20, n_samples // 5))
@@ -1498,6 +1503,44 @@ def _generate_confusable_tts(phrases: list[str], out_dir: Path, n_per_phrase: in
     print(f"  ✓ {generated} confusable WAVs ({len(phrases)} phrases × {n_per_phrase} variations)")
 
 
+def _chunk_negative_clips(src_dir: Path, dst_dir: Path, chunk_s: float = 3.0,
+                          min_rms_db: float = -50.0) -> Path:
+    """Split custom negatives into chunk_s pieces (rebuilt when src changes).
+
+    Near-silent chunks are dropped: silence is already covered by the
+    background datasets and only dilutes the household speech."""
+    sig = hashlib.md5("\n".join(
+        f"{p.name}:{p.stat().st_size}" for p in sorted(src_dir.glob("*.wav"))).encode()).hexdigest()
+    sig_file = dst_dir / "_source.md5"
+    if sig_file.exists() and sig_file.read_text() == sig:
+        return dst_dir
+    if dst_dir.exists():
+        shutil.rmtree(str(dst_dir))
+    dst_dir.mkdir(parents=True)
+    n_in = n_out = 0
+    for wav in sorted(src_dir.glob("*.wav")):
+        sr, a = scipy.io.wavfile.read(str(wav))
+        if a.ndim > 1:
+            a = a[:, 0]
+        if sr != 16000 or a.dtype != np.int16:
+            print(f"  ⚠ skipping {wav.name}: expected 16 kHz int16, got {sr} Hz {a.dtype}")
+            continue
+        n_in += 1
+        step = int(chunk_s * sr)
+        # Short clips stay whole; the last partial chunk is kept if ≥ 1 s
+        starts = range(0, max(len(a) - sr, 1), step) if len(a) > step else [0]
+        for i, s in enumerate(starts):
+            chunk = a[s:s + step]
+            rms = np.sqrt(np.mean(chunk.astype(np.float64) ** 2)) / 32768
+            if 20 * np.log10(rms + 1e-9) < min_rms_db:
+                continue
+            scipy.io.wavfile.write(str(dst_dir / f"{wav.stem}_c{i:02d}.wav"), sr, chunk)
+            n_out += 1
+    sig_file.write_text(sig)
+    print(f"  {n_in} custom negative clips → {n_out} chunks of ≤{chunk_s:.0f} s")
+    return dst_dir
+
+
 def _generate_mww_positive_features(pos_dir: Path, features_dir: Path,
                                      repetition: int = 2, eq_prob: float = 0.1,
                                      truncate_randomly: bool = False):
@@ -1553,6 +1596,19 @@ def _generate_mww_positive_features(pos_dir: Path, features_dir: Path,
         aug_kwargs["impulse_paths"] = rir_paths
 
     augmenter = Augmentation(**aug_kwargs)
+
+    # Cached mmaps are only valid for the exact clip set they were built from —
+    # without this, clips added later (e.g. new negative_train/ recordings) were
+    # silently ignored forever.
+    fingerprint = hashlib.md5("\n".join(
+        sorted(p.name for p in Path(pos_dir).glob("*.wav"))).encode()).hexdigest()
+    fp_file = features_dir / "_clipset.md5"
+    # Caches from before this check have no fingerprint: adopt them once.
+    if fp_file.exists() and fp_file.read_text() != fingerprint:
+        print(f"  Clip set changed → rebuilding {features_dir.name}")
+        shutil.rmtree(str(features_dir))
+    features_dir.mkdir(parents=True, exist_ok=True)
+    fp_file.write_text(fingerprint)
 
     for split, split_name, rep, slide in [
         ("training",   "train",      repetition, 10),
@@ -1746,9 +1802,12 @@ def _run_microwakeword_train(wake_word: str, model_dir: Path, n_samples: int, st
                                          repetition=5, eq_prob=0.3)
 
     # ── Custom negative recordings (from recording UI → negative_train/) ───────
+    # Long household clips (HA STT recordings are up to 15 s) are chunked first:
+    # the augmenter keeps only 3.2 s per clip, so unchunked most audio was lost.
     if has_custom_neg:
         print("\n  Generating custom negative spectrograms …")
-        _generate_mww_positive_features(neg_user_dir, neg_features_dir,
+        neg_chunk_dir = _chunk_negative_clips(neg_user_dir, mww_work_dir / "negative_chunks")
+        _generate_mww_positive_features(neg_chunk_dir, neg_features_dir,
                                          repetition=2, eq_prob=0.1)
 
     # ── German speech negative spectrograms ────────────────────────────────────
